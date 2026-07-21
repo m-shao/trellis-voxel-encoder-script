@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Local TRELLIS checkpoints (fetch with download_weights.py)
+weights/
+
+# Generated latents / voxel meshes
+outputs/
+
+TRELLIS/
