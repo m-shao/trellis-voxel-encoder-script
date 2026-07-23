@@ -8,9 +8,15 @@ more than --max-mismatch voxels (default 0 = bit-identical).
 
 Usage
 -----
+<<<<<<< HEAD
 Requires the TRELLIS.2 submodule at ./TRELLIS2 and Python deps (numpy, torch,
 trimesh). SS encoder/decoder weights load only from ./weights; run
 download_weights.py once (a missing checkpoint raises rather than hitting the network).
+=======
+Requires the bundled TRELLIS.2 checkout at ../TRELLIS.2 and Python deps (numpy,
+torch, trimesh). SS encoder/decoder weights load from ./weights if present (run
+download_weights.py), else are fetched from Hugging Face on first run.
+>>>>>>> 6c79a46 (fuck)
 
     python test_ss_roundtrip.py model.glb
     python test_ss_roundtrip.py model.obj --max-mismatch 8
@@ -26,10 +32,10 @@ Exits 0 on PASS, 1 on FAIL.
 """
 
 import argparse
-import importlib
 
 import torch
 
+<<<<<<< HEAD
 from mesh_to_ss_latent import (
     encode_to_ss_latent,
     load_and_normalize,
@@ -56,6 +62,18 @@ def decode_to_occupancy(latent, decoder):
     """Decode an SS latent to a 64^3 bool grid (TRELLIS threshold: logits > 0)."""
     logits = decoder(latent)                       # (1, 1, 64, 64, 64)
     return (logits[0, 0] > 0).cpu().numpy()
+=======
+try:  # package or script
+    from .mesh_to_ss_latent import (
+        decode_to_occupancy, encode_to_ss_latent, load_and_normalize,
+        load_ss_decoder, load_ss_encoder, voxelize_surface,
+    )
+except ImportError:
+    from mesh_to_ss_latent import (
+        decode_to_occupancy, encode_to_ss_latent, load_and_normalize,
+        load_ss_decoder, load_ss_encoder, voxelize_surface,
+    )
+>>>>>>> 6c79a46 (fuck)
 
 
 def main():

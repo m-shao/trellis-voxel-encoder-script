@@ -12,7 +12,10 @@ from pathlib import Path
 
 import numpy as np
 
-from mesh_to_ss_latent import GRID, OUTPUTS_DIR, load_and_normalize, voxelize_surface, voxels_to_mesh
+try:  # package or script
+    from .mesh_to_ss_latent import GRID, OUTPUTS_DIR, load_and_normalize, voxelize_surface, voxels_to_mesh
+except ImportError:
+    from mesh_to_ss_latent import GRID, OUTPUTS_DIR, load_and_normalize, voxelize_surface, voxels_to_mesh
 
 
 def mesh_to_voxel_glb(path):

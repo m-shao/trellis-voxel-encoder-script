@@ -12,9 +12,9 @@ not the shape/material (SLat) latents.
 
 Usage
 -----
-Requires the TRELLIS.2 submodule at ./TRELLIS2 and Python deps (numpy, torch,
-trimesh). SS encoder weights load only from ./weights; run download_weights.py
-once to populate it (a missing checkpoint raises rather than hitting the network).
+Requires the bundled TRELLIS.2 checkout at ../TRELLIS.2 and Python deps (numpy,
+torch, trimesh). SS encoder weights load from ./weights if present (run
+download_weights.py), else are fetched from Hugging Face on first run.
 
     python mesh_to_ss_latent.py model.glb
     python mesh_to_ss_latent.py model.obj --out ss_latent.npy
@@ -32,6 +32,7 @@ mesh          Input .glb or .obj file.
 
 import argparse
 import importlib
+import os
 import sys
 import types
 from pathlib import Path
@@ -42,9 +43,17 @@ import trimesh
 
 GRID = 64
 SS_ENCODER = "microsoft/TRELLIS-image-large/ckpts/ss_enc_conv3d_16l8_fp16"
-TRELLIS_ROOT = Path(__file__).resolve().parent / "TRELLIS2"
-WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
+SS_DECODER = "microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16"
+
+# Paths are env-overridable so this package works both standalone (next to ../TRELLIS.2) and when
+# folded into other apps (e.g. on Modal: TRELLIS2_ROOT=/root/TRELLIS.2,
+# SS_ENCODE_WEIGHTS_DIR=/vol/pretrained/vae).
+TRELLIS2_ROOT = Path(os.environ.get("TRELLIS2_ROOT", Path(__file__).resolve().parent.parent / "TRELLIS.2"))
+WEIGHTS_DIR = Path(os.environ.get("SS_ENCODE_WEIGHTS_DIR", Path(__file__).resolve().parent / "weights"))
 OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
+
+# cache loaded VAE modules by (hf_path, device) so repeated calls (notebook / server) don't reload
+_MODEL_CACHE: dict = {}
 
 
 def load_and_normalize(path):
@@ -88,37 +97,55 @@ def voxels_to_mesh(coords, grid=GRID):
     return trimesh.Trimesh(vertices=verts, faces=tris, process=False)
 
 
-def resolve_ckpt(name):
-    """Return the local weights/<name> checkpoint path, which must exist.
+def resolve_ckpt(hf_path):
+    """Return a local weights/<name> path if present, else the HF hub path.
 
-    Weights are always loaded from ./weights; run download_weights.py first.
+    Run download_weights.py to populate weights/ and skip per-run HF requests.
     """
-    local = WEIGHTS_DIR / name.split("/")[-1]
-    if not (local.with_suffix(".json").is_file() and local.with_suffix(".safetensors").is_file()):
-        raise FileNotFoundError(
-            f"missing local weights for '{local.name}' in {WEIGHTS_DIR}; run download_weights.py first"
-        )
-    return str(local)
+    local = WEIGHTS_DIR / hf_path.split("/")[-1]
+    if local.with_suffix(".json").is_file() and local.with_suffix(".safetensors").is_file():
+        return str(local)
+    return hf_path
+
+
+def import_trellis2_models():
+    """Import and return `trellis2.models`, skipping trellis2's package __init__.
+
+    trellis2's top-level __init__ pulls in pipelines/renderers/representations
+    (flash_attn, kaolin, nvdiffrast, rembg, ...) that this pure-Conv3d SS-VAE
+    doesn't need, so we register a lightweight namespace package for `trellis2`
+    and import the `models` subpackage directly, bypassing that heavy __init__.
+    """
+    if "trellis2" not in sys.modules:
+        sys.path.insert(0, str(TRELLIS2_ROOT))
+        pkg = types.ModuleType("trellis2")
+        pkg.__path__ = [str(TRELLIS2_ROOT / "trellis2")]
+        sys.modules["trellis2"] = pkg
+    return importlib.import_module("trellis2.models")
+
+
+def _load_vae(hf_path, device):
+    """Load + cache a trellis2 dense Conv3d SS-VAE module (encoder or decoder)."""
+    key = (hf_path, device)
+    if key in _MODEL_CACHE:
+        return _MODEL_CACHE[key]
+    models = import_trellis2_models()
+    net = models.from_pretrained(resolve_ckpt(hf_path)).eval()
+    if device != "cuda":
+        net.convert_to_fp32()  # fp16 conv torso is CUDA-only
+    net = net.to(device)
+    _MODEL_CACHE[key] = net
+    return net
 
 
 def load_ss_encoder(device):
-    """Load TRELLIS.2's pretrained sparse-structure VAE encoder.
+    """Load (cached) trellis2's pretrained sparse-structure VAE encoder."""
+    return _load_vae(SS_ENCODER, device)
 
-    TRELLIS.2's top-level package imports heavy deps (rembg, flash_attn, o_voxel, ...)
-    that this pure-Conv3d encoder doesn't need, so we import `trellis2.models`
-    directly and skip that package __init__.
-    """
-    if "trellis2" not in sys.modules:
-        sys.path.insert(0, str(TRELLIS_ROOT))
-        pkg = types.ModuleType("trellis2")
-        pkg.__path__ = [str(TRELLIS_ROOT / "trellis2")]
-        sys.modules["trellis2"] = pkg
-    models = importlib.import_module("trellis2.models")
 
-    encoder = models.from_pretrained(resolve_ckpt(SS_ENCODER)).eval()
-    if device == "cpu":
-        encoder.convert_to_fp32()  # fp16 convs are CUDA-only
-    return encoder.to(device)
+def load_ss_decoder(device):
+    """Load (cached) trellis2's pretrained sparse-structure VAE decoder."""
+    return _load_vae(SS_DECODER, device)
 
 
 @torch.no_grad()
@@ -126,6 +153,24 @@ def encode_to_ss_latent(occ, encoder):
     """Encode a 64^3 grid into the SS latent (1, C_s, 16, 16, 16) (posterior mean)."""
     x = torch.from_numpy(occ).float().to(encoder.device)[None, None]
     return encoder(x)
+
+
+@torch.no_grad()
+def decode_to_occupancy(latent, decoder):
+    """Decode an SS latent (1, C_s, 16, 16, 16) to a 64^3 bool grid (TRELLIS threshold: logits > 0)."""
+    if not torch.is_tensor(latent):
+        latent = torch.from_numpy(np.asarray(latent))
+    latent = latent.float().to(decoder.device)
+    if latent.ndim == 4:
+        latent = latent[None]
+    return (decoder(latent)[0, 0] > 0).cpu().numpy()
+
+
+def encode_mesh(path, device="cuda"):
+    """Full mesh -> (occ 64^3 bool, latent (C_s,16,16,16) float32 numpy). The primary voxel-encode API."""
+    occ = voxelize_surface(load_and_normalize(path))
+    latent = encode_to_ss_latent(occ, load_ss_encoder(device))[0].float().cpu().numpy()
+    return occ, latent
 
 
 def mesh_to_ss_latent(path, device="cuda", glb_path=None):
@@ -148,7 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--out", help="Output .npy path (default: outputs/<mesh>.npy).")
     parser.add_argument("--glb", action="store_true",
                         help="Also write the 64^3 voxel grid as <out>.voxel.glb.")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     args = parser.parse_args()
 
     out_path = Path(args.out) if args.out else OUTPUTS_DIR / f"{Path(args.mesh).stem}.npy"
