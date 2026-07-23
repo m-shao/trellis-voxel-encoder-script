@@ -8,9 +8,9 @@ more than --max-mismatch voxels (default 0 = bit-identical).
 
 Usage
 -----
-Requires a local TRELLIS checkout at ./TRELLIS and Python deps (numpy, torch,
-trimesh). SS encoder/decoder weights load from ./weights if present (run
-download_weights.py), else are fetched from Hugging Face on first run.
+Requires the TRELLIS.2 submodule at ./TRELLIS2 and Python deps (numpy, torch,
+trimesh). SS encoder/decoder weights load only from ./weights; run
+download_weights.py once (a missing checkpoint raises rather than hitting the network).
 
     python test_ss_roundtrip.py model.glb
     python test_ss_roundtrip.py model.obj --max-mismatch 8
@@ -42,9 +42,9 @@ SS_DECODER = "microsoft/TRELLIS-image-large/ckpts/ss_dec_conv3d_16l8_fp16"
 
 
 def load_ss_decoder(device):
-    """Load the SS decoder. `trellis` must already be importable, which
+    """Load the SS decoder. `trellis2` must already be importable, which
     load_ss_encoder arranges by putting the bundled checkout on sys.path."""
-    models = importlib.import_module("trellis.models")
+    models = importlib.import_module("trellis2.models")
     decoder = models.from_pretrained(resolve_ckpt(SS_DECODER)).eval()
     if device == "cpu":
         decoder.convert_to_fp32()

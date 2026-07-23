@@ -12,9 +12,9 @@ not the shape/material (SLat) latents.
 
 Usage
 -----
-Requires a local TRELLIS checkout at ./TRELLIS and Python deps (numpy, torch,
-trimesh). SS encoder weights load from ./weights if present (run
-download_weights.py), else are fetched from Hugging Face on first run.
+Requires the TRELLIS.2 submodule at ./TRELLIS2 and Python deps (numpy, torch,
+trimesh). SS encoder weights load only from ./weights; run download_weights.py
+once to populate it (a missing checkpoint raises rather than hitting the network).
 
     python mesh_to_ss_latent.py model.glb
     python mesh_to_ss_latent.py model.obj --out ss_latent.npy
@@ -42,7 +42,7 @@ import trimesh
 
 GRID = 64
 SS_ENCODER = "microsoft/TRELLIS-image-large/ckpts/ss_enc_conv3d_16l8_fp16"
-TRELLIS_ROOT = Path(__file__).resolve().parent / "TRELLIS"
+TRELLIS_ROOT = Path(__file__).resolve().parent / "TRELLIS2"
 WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
 OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
 
@@ -88,30 +88,32 @@ def voxels_to_mesh(coords, grid=GRID):
     return trimesh.Trimesh(vertices=verts, faces=tris, process=False)
 
 
-def resolve_ckpt(hf_path):
-    """Return a local weights/<name> path if present, else the HF hub path.
+def resolve_ckpt(name):
+    """Return the local weights/<name> checkpoint path, which must exist.
 
-    Run download_weights.py to populate weights/ and skip per-run HF requests.
+    Weights are always loaded from ./weights; run download_weights.py first.
     """
-    local = WEIGHTS_DIR / hf_path.split("/")[-1]
-    if local.with_suffix(".json").is_file() and local.with_suffix(".safetensors").is_file():
-        return str(local)
-    return hf_path
+    local = WEIGHTS_DIR / name.split("/")[-1]
+    if not (local.with_suffix(".json").is_file() and local.with_suffix(".safetensors").is_file()):
+        raise FileNotFoundError(
+            f"missing local weights for '{local.name}' in {WEIGHTS_DIR}; run download_weights.py first"
+        )
+    return str(local)
 
 
 def load_ss_encoder(device):
-    """Load TRELLIS's pretrained sparse-structure VAE encoder.
+    """Load TRELLIS.2's pretrained sparse-structure VAE encoder.
 
-    TRELLIS's top-level package imports heavy deps (rembg, flash_attn, kaolin, ...)
-    that this pure-Conv3d encoder doesn't need, so we import `trellis.models`
+    TRELLIS.2's top-level package imports heavy deps (rembg, flash_attn, o_voxel, ...)
+    that this pure-Conv3d encoder doesn't need, so we import `trellis2.models`
     directly and skip that package __init__.
     """
-    if "trellis" not in sys.modules:
+    if "trellis2" not in sys.modules:
         sys.path.insert(0, str(TRELLIS_ROOT))
-        pkg = types.ModuleType("trellis")
-        pkg.__path__ = [str(TRELLIS_ROOT / "trellis")]
-        sys.modules["trellis"] = pkg
-    models = importlib.import_module("trellis.models")
+        pkg = types.ModuleType("trellis2")
+        pkg.__path__ = [str(TRELLIS_ROOT / "trellis2")]
+        sys.modules["trellis2"] = pkg
+    models = importlib.import_module("trellis2.models")
 
     encoder = models.from_pretrained(resolve_ckpt(SS_ENCODER)).eval()
     if device == "cpu":
