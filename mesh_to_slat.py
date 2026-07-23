@@ -23,7 +23,7 @@ Requirements (a full TRELLIS.2 CUDA install):
   - flexgemm  sparse-conv backend used by the SC-VAE forward pass.
   - a CUDA GPU, plus the TRELLIS.2-4B shape_enc/tex_enc weights in ./weights
     (run download_weights.py; a missing checkpoint raises, no network fallback).
-Install with:  ./TRELLIS2/setup.sh --o-voxel --cumesh --flexgemm   (Linux + CUDA)
+Install with:  ../TRELLIS.2/setup.sh --o-voxel --cumesh --flexgemm   (Linux + CUDA)
 """
 
 import argparse
@@ -46,8 +46,11 @@ AABB = [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]]     # canonical cube, fixed by the 
 SHAPE_ENC = "microsoft/TRELLIS.2-4B/ckpts/shape_enc_next_dc_f16c32_fp16"
 TEX_ENC = "microsoft/TRELLIS.2-4B/ckpts/tex_enc_next_dc_f16c32_fp16"
 PBR_ATTRS = ["base_color", "metallic", "roughness", "alpha"]   # 3 + 1 + 1 + 1 = 6 channels
-TRELLIS_ROOT = Path(__file__).resolve().parent / "TRELLIS2"
-WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
+# Paths are env-overridable so this package works both standalone (next to ../TRELLIS.2) and when
+# folded into other apps (e.g. on Modal: TRELLIS2_ROOT=/root/TRELLIS.2,
+# SS_ENCODE_WEIGHTS_DIR=/vol/pretrained/vae).
+TRELLIS2_ROOT = Path(os.environ.get("TRELLIS2_ROOT", Path(__file__).resolve().parent.parent / "TRELLIS.2"))
+WEIGHTS_DIR = Path(os.environ.get("SS_ENCODE_WEIGHTS_DIR", Path(__file__).resolve().parent / "weights"))
 OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
 
 
@@ -69,9 +72,9 @@ def import_trellis2():
     heavy top-level __init__ (pipelines/renderers pull in deps the encoders don't
     need). Same bypass as the stage-1 script."""
     if "trellis2" not in sys.modules:
-        sys.path.insert(0, str(TRELLIS_ROOT))
+        sys.path.insert(0, str(TRELLIS2_ROOT))
         pkg = types.ModuleType("trellis2")
-        pkg.__path__ = [str(TRELLIS_ROOT / "trellis2")]
+        pkg.__path__ = [str(TRELLIS2_ROOT / "trellis2")]
         sys.modules["trellis2"] = pkg
     models = importlib.import_module("trellis2.models")
     sp = importlib.import_module("trellis2.modules.sparse")
@@ -85,7 +88,7 @@ def _o_voxel():
     except ImportError as e:
         raise SystemExit(
             "o_voxel is required for stage 2/3 but is not installed. Build it with a "
-            "CUDA toolkit:\n    pip install ./TRELLIS2/o-voxel --no-build-isolation"
+            "CUDA toolkit:\n    pip install ../TRELLIS.2/o-voxel --no-build-isolation"
         ) from e
 
 
